@@ -1,0 +1,61 @@
+name: Release
+
+permissions: write-all
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 8,20 * * *'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        
+      - name: Download innoextract
+        run: |
+          wget https://github.com/dscharrer/innoextract/releases/download/1.9/innoextract-1.9-linux.tar.xz
+          tar -xvf innoextract-1.9-linux.tar.xz innoextract-1.9-linux/bin/amd64/innoextract --strip-components 3
+          chmod +x innoextract
+          sudo mv innoextract /usr/local/bin
+          
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          USER_AGENT: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        run: |          
+          url='https://mp.weixin.qq.com/mp/appmsgalbum?__biz=Mzg3Mzc0NTA3NA==&action=getalbum&album_id=2329805780276838401&f=json'
+          articles=$(curl -s -H "User-Agent: $USER_AGENT" "$url" | jq '[.getalbum_resp.article_list[] | {title: .title, url: .url}]')
+          
+          title=$(echo $articles | jq -r '.[0].title')
+          url=$(echo $articles | jq -r '.[0].url' | sed 's/http/https/g')
+          
+          version=$(echo "$title" | grep -oE '\([0-9]{4}-[0-9]{2}-[0-9]{2}\)' | tr -d '()' | tr -d '-')
+          
+          cur_version=$(cat ./version.json | jq -r '.version')
+          if [ "$version" == "$cur_version" ]; then
+              echo "It's the same version, no need to update."
+              exit 0
+          fi
+          
+          html=$(curl -s -H "User-Agent: $USER_AGENT" "${url}")
+          match=$(echo "$html" | grep -o 'https://www.cz88.net/soft/[a-zA-Z0-9-]\+.zip')
+          
+          mkdir -p ./temp
+          wget -U "$USER_AGENT" -O ./temp/download.zip "$match"
+          
+          unzip ./temp/download.zip -d ./temp
+          innoextract ./temp/setup.exe -d ./temp
+          mkdir -p ./dist
+          mv ./temp/app/qqwry.dat ./dist/qqwry.dat
+          
+          echo "{\"version\": \"$version\"}" > ./version.json
+          
+          gh release create "$version" -t "$version" -n "QQWry version: $version" ./dist/qqwry.dat
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add version.json
+          git commit -m "chore: Update qqwry.dat to $version"
+          git push
